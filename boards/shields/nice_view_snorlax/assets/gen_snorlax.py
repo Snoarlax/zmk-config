@@ -2,9 +2,11 @@
 """Generate the nice_view Snorlax art from PNG artwork.
 
 Usage:
-  gen_snorlax.py                       # the bundled reference sprite
+  gen_snorlax.py                       # the bundled artwork, snorlax_frames.png
   gen_snorlax.py frame1.png frame2.png # one PNG per animation frame
   gen_snorlax.py sheet.png --frames 2  # a Piskel spritesheet, frames in a row
+
+The bundled snorlax_frames.png is a two-frame 66x66 sheet.
 
 Draw upright and roughly square; the rotation for the panel is applied here.
 Art is never enlarged, so a drawing that already fits the 66x66 footprint is
@@ -252,7 +254,7 @@ def main():
         i = args.index("--frames")
         sheet_frames = int(args[i + 1])
         del args[i : i + 2]
-    paths = args or ["snorlax_sprite.png"]
+    paths = args or ["snorlax_frames.png"]
 
     src = load(paths, sheet_frames)
     x0, x1, y0, y1 = shared_box(src)
@@ -263,12 +265,19 @@ def main():
     scale = min(1.0, ART / bw, ART / bh)
     dw, dh = max(1, int(bw * scale)), max(1, int(bh * scale))
 
+    # The speckle cleanup exists to tidy a shaded sprite's dithering. Line art
+    # drawn black on transparent has no pale regions at all, and running it
+    # there would close small deliberate gaps - an eye, a nostril - instead.
+    shaded = any(any(any(row) for row in pale) for _, pale, _, _ in src)
+
     upright = []
     for solid, pale, w, h in src:
         crop = lambda m: [row[x0 : x1 + 1] for row in m[y0 : y1 + 1]]
         body = fit(crop(solid), bw, bh, dw, dh, scale)
         belly = fit(crop(pale), bw, bh, dw, dh, scale)
-        art = fill_small_holes(outline_pale(body, belly, dw, dh), dw, dh)
+        art = outline_pale(body, belly, dw, dh)
+        if shaded:
+            art = fill_small_holes(art, dw, dh)
         upright.append(place(art, dw, dh))
 
     # A single still gets a slow one-pixel rise and fall so it reads as
