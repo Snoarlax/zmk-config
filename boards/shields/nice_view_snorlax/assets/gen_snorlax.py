@@ -1,109 +1,182 @@
 #!/usr/bin/env python3
-"""Rasterise a sleeping Snorlax for the nice_view peripheral screen.
+"""Generate the nice_view Snorlax art from the reference sprite.
 
-Hand-authored at 34x34 as horizontal ink runs, then scaled 2x to 68x68 and
-padded to the 69x68 the nice_view_gem art uses. Scaling gives the 2px stroke
-weight the crystal frames it replaces are drawn with.
+Usage: python3 gen_snorlax.py [source.png]  (default: snorlax_sprite.png)
 
-Output per frame: 69x68 INDEXED_1BIT, 9 bytes/row, 620 bytes with palette.
+Traced from sprites/pokemon/143.png (PokeAPI), reduced to one bit per pixel:
+the sprite's own black outline and blue body become ink, its cream belly and
+foot pads become paper, so the belly, arms and claws survive the reduction
+instead of being redrawn by hand.
+
+The panel is mounted portrait and its canvas is rotated on the way to the
+display, so the art is stored a quarter turn over to arrive upright. Which
+way the panel turns isn't visible from the art this replaces, so both
+rotations are emitted and CONFIG_NICE_VIEW_SNORLAX_ROTATE_CCW picks one.
+
+Output matches the crystal geometry it replaces: 69x68 INDEXED_1BIT,
+9 bytes per row, 620 bytes per frame including the palette header.
 """
 
+import sys
+
+import png
+
 W, H = 69, 68
-SW, SH = 34, 34  # source grid
-
-# Ink runs per source row: list of inclusive (x0, x1) spans.
-BODY = {
-    1: [(9, 10), (23, 24)],
-    2: [(8, 11), (22, 25)],
-    3: [(8, 12), (21, 25)],
-    4: [(8, 25)],
-    5: [(8, 25)],
-    6: [(8, 25)],
-    7: [(8, 25)],
-    8: [(8, 25)],
-    9: [(8, 25)],
-    10: [(8, 25)],
-    11: [(8, 25)],
-    12: [(8, 25)],
-    13: [(7, 26)],
-    14: [(6, 27)],
-    15: [(5, 28)],
-    16: [(4, 29)],
-    17: [(3, 30)],
-    18: [(2, 31)],
-    19: [(2, 31)],
-    20: [(1, 32)],
-    21: [(1, 32)],
-    22: [(1, 32)],
-    23: [(1, 32)],
-    24: [(1, 32)],
-    25: [(1, 32)],
-    26: [(1, 32)],
-    27: [(1, 32)],
-    28: [(2, 31)],
-    29: [(2, 31)],
-    30: [(3, 30)],
-    31: [(4, 29)],
-    32: [(6, 27)],
-}
+ART = 66  # the art's square footprint inside the 69x68 buffer
+SPRITE = sys.argv[1] if len(sys.argv) > 1 else "snorlax_sprite.png"
+INK_LUM = 140  # below this (and opaque) is ink
 
 
-def build(phase=0):
-    """phase 0..3 shifts the belly line, giving a slow breathing cycle."""
-    g = [[0] * SW for _ in range(SH)]
-    for y, runs in BODY.items():
-        for x0, x1 in runs:
-            for x in range(x0, x1 + 1):
-                g[y][x] = 1
+def trace():
+    """Sprite -> 1-bit grid, cropped to its bounding box.
 
-    def cut(y, x0, x1):
-        for x in range(x0, x1 + 1):
-            if 0 <= y < SH and 0 <= x < SW:
-                g[y][x] = 0
+    The whole body stays solid ink; only the borders of the sprite's pale
+    regions - belly, arm creases, foot pads - are cut back to paper. Filling
+    the pale areas instead would leave a mostly-white shape, since a
+    front-facing Snorlax is nearly all belly.
+    """
+    sw, sh, px, rgba = png.read(SPRITE)
+    solid = [[0] * sw for _ in range(sh)]
+    pale = [[0] * sw for _ in range(sh)]
+    for y in range(sh):
+        for x in range(sw):
+            r, gg, b, a = rgba(px[y][x])
+            if a < 128:
+                continue
+            solid[y][x] = 1
+            if 0.299 * r + 0.587 * gg + 0.114 * b >= INK_LUM:
+                pale[y][x] = 1
 
-    # closed, contented eyes
-    cut(8, 12, 13)
-    cut(8, 20, 21)
-    cut(9, 11, 14)
-    cut(9, 19, 22)
+    # keep only substantial pale areas - the belly, the foot pads. The sprite
+    # dithers its highlights, and tracing every stray pale pixel covers the
+    # body in speckle.
+    seen = [[0] * sw for _ in range(sh)]
+    for y in range(sh):
+        for x in range(sw):
+            if not pale[y][x] or seen[y][x]:
+                continue
+            stack, blob = [(y, x)], []
+            seen[y][x] = 1
+            while stack:
+                cy, cx = stack.pop()
+                blob.append((cy, cx))
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < sh and 0 <= nx < sw and pale[ny][nx] and not seen[ny][nx]:
+                        seen[ny][nx] = 1
+                        stack.append((ny, nx))
+            if len(blob) < 500:
+                for by, bx in blob:
+                    pale[by][bx] = 0
 
-    # mouth
-    cut(12, 15, 18)
-    cut(11, 15, 15)
-    cut(11, 18, 18)
+    xs = [x for y in range(sh) for x in range(sw) if solid[y][x]]
+    ys = [y for y in range(sh) for x in range(sw) if solid[y][x]]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    crop = lambda m: [row[x0 : x1 + 1] for row in m[y0 : y1 + 1]]
+    return crop(solid), crop(pale), x1 - x0 + 1, y1 - y0 + 1
 
-    # belly: shallow dome, drifting down a pixel as it "breathes"
-    d = (0, 0, 1, 1)[phase]
-    cut(20 + d, 11, 22)
-    cut(21 + d, 8, 10)
-    cut(21 + d, 23, 25)
-    cut(22 + d, 6, 7)
-    cut(22 + d, 26, 27)
 
-    # line where the feet meet the body, plus the notch between them
-    cut(27, 3, 30)
-    for y in range(28, 33):
-        cut(y, 16, 17)
+def fit(g, gw, gh, size):
+    """Area-majority downscale into a size x size box, aspect preserved."""
+    scale = min(size / gw, size / gh)
+    dw, dh = max(1, int(gw * scale)), max(1, int(gh * scale))
+    out = [[0] * dw for _ in range(dh)]
+    for dy in range(dh):
+        for dx in range(dw):
+            sx0, sx1 = int(dx / scale), max(int(dx / scale) + 1, int((dx + 1) / scale))
+            sy0, sy1 = int(dy / scale), max(int(dy / scale) + 1, int((dy + 1) / scale))
+            on = tot = 0
+            for sy in range(sy0, min(sy1, gh)):
+                for sx in range(sx0, min(sx1, gw)):
+                    tot += 1
+                    on += g[sy][sx]
+            # bias toward keeping ink so the outline survives the reduction
+            if tot and on * 2 >= tot:
+                out[dy][dx] = 1
+    return out, dw, dh
 
-    # two claws per foot
-    for y in (30, 31):
-        for cx in (6, 10, 23, 27):
-            cut(y, cx, cx)
 
+def despeckle(g, w, h, rounds=1):
+    """Drop lone pixels and fill lone holes.
+
+    The sprite dithers its shading, which survives the reduction as speckle
+    and reads as dirt on a 1-bit panel.
+    """
+    for _ in range(rounds):
+        out = [row[:] for row in g]
+        for y in range(h):
+            for x in range(w):
+                n = 0
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        if dy == 0 and dx == 0:
+                            continue
+                        yy, xx = y + dy, x + dx
+                        if 0 <= yy < h and 0 <= xx < w and g[yy][xx]:
+                            n += 1
+                if g[y][x] and n <= 2:
+                    out[y][x] = 0
+                elif not g[y][x] and n == 8:
+                    out[y][x] = 1
+        g = out
     return g
 
 
-def scale(g):
-    m = [[0] * W for _ in range(H)]
-    for y in range(SH):
-        for x in range(SW):
-            if g[y][x]:
-                for dy in range(2):
-                    for dx in range(2):
-                        Y, X = y * 2 + dy, x * 2 + dx
-                        if Y < H and X < W:
-                            m[Y][X] = 1
+def fill_small_holes(g, w, h, limit=12):
+    """Close interior white specks, keep the long boundary lines.
+
+    What's left after the reduction is a mix of real edges - the belly line,
+    the arm creases - and shading fragments. The real ones are long connected
+    runs; the fragments are small blobs.
+    """
+    seen = [[0] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            if g[y][x] or seen[y][x]:
+                continue
+            stack, blob, touches_edge = [(y, x)], [], False
+            seen[y][x] = 1
+            while stack:
+                cy, cx = stack.pop()
+                blob.append((cy, cx))
+                if cy in (0, h - 1) or cx in (0, w - 1):
+                    touches_edge = True
+                # 8-connected: a diagonal line has no 4-connected neighbours,
+                # so 4-connectivity would score the belly line as loose specks
+                # and fill it back in.
+                for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)):
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < h and 0 <= nx < w and not g[ny][nx] and not seen[ny][nx]:
+                        seen[ny][nx] = 1
+                        stack.append((ny, nx))
+            if not touches_edge and len(blob) < limit:
+                for by, bx in blob:
+                    g[by][bx] = 1
+    return g
+
+
+def place(art, aw, ah, bob):
+    """Centre the art in the square footprint, offset vertically by bob."""
+    m = [[0] * ART for _ in range(ART)]
+    ox = (ART - aw) // 2
+    oy = (ART - ah) // 2 + bob
+    for y in range(ah):
+        for x in range(aw):
+            Y, X = y + oy, x + ox
+            if art[y][x] and 0 <= Y < ART and 0 <= X < ART:
+                m[Y][X] = 1
     return m
+
+
+def rotate(m, cw):
+    """Quarter turn into the 69x68 buffer."""
+    out = [[0] * W for _ in range(H)]
+    for y in range(ART):
+        for x in range(ART):
+            src = m[ART - 1 - x][y] if cw else m[x][ART - 1 - y]
+            if src and y < H and x < W:
+                out[y][x] = 1
+    return out
 
 
 def to_bytes(m):
@@ -127,18 +200,8 @@ def c_array(out):
     )
 
 
-phases = [0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 2, 2, 1, 1]
-frames = [scale(build(p)) for p in phases]
-
-with open("snorlax_preview.txt", "w") as f:
-    for y in range(H):
-        f.write("".join("#" if frames[0][y][x] else "." for x in range(W)) + "\n")
-
-parts = []
-for i, fr in enumerate(frames, start=1):
-    out, rb = to_bytes(fr)
-    parts.append(
-        f"""const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_SNORLAX uint8_t
+def frame_src(i, out, rb):
+    return f"""const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_SNORLAX uint8_t
     snorlax_{i:02d}_map[] = {{
 #if CONFIG_NICE_VIEW_WIDGET_INVERTED
         0x00, 0x00, 0x00, 0xff, /*Color of index 0*/
@@ -161,7 +224,48 @@ const lv_img_dsc_t snorlax_{i:02d} = {{
     .data = snorlax_{i:02d}_map,
 }};
 """
-    )
+
+
+def emit(frames):
+    return "\n".join(frame_src(i, *to_bytes(f)) for i, f in enumerate(frames, start=1))
+
+
+solid, pale, tw, th = trace()
+
+# Reduce the two masks separately, then derive the belly line at final scale.
+# Deriving it first and reducing afterwards fragments a 1px curve into specks
+# that no amount of cleanup can tell apart from the sprite's dithering.
+body, aw, ah = fit(solid, tw, th, ART)
+belly, _, _ = fit(pale, tw, th, ART)
+
+art = [row[:] for row in body]
+for y in range(ah):
+    for x in range(aw):
+        if not belly[y][x]:
+            continue
+        for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            yy, xx = y + dy, x + dx
+            if 0 <= yy < ah and 0 <= xx < aw and body[yy][xx] and not belly[yy][xx]:
+                art[y][x] = 0
+                break
+
+# the belly line survives as one long run; the head's dithered shading
+# survives as specks, so clear anything too small to be an edge
+art = fill_small_holes(art, aw, ah, limit=8)
+
+# a slow one-pixel rise and fall: sleeping, not idle
+bob = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0]
+upright = [place(art, aw, ah, b) for b in bob]
+cw = [rotate(u, True) for u in upright]
+ccw = [rotate(u, False) for u in upright]
+
+with open("snorlax_upright.txt", "w") as f:
+    for row in upright[0]:
+        f.write("".join("#" if v else "." for v in row) + "\n")
+
+with open("snorlax_preview.txt", "w") as f:
+    for row in cw[0]:
+        f.write("".join("#" if v else "." for v in row) + "\n")
 
 with open("snorlax.c", "w") as f:
     f.write(
@@ -175,8 +279,23 @@ with open("snorlax.c", "w") as f:
 #define LV_ATTRIBUTE_IMG_SNORLAX
 #endif
 
+/* The panel is mounted portrait and the widget canvas is rotated on its way
+ * there, so the art is stored a quarter turn over to land upright. Which way
+ * the panel turns isn't visible from the art it replaces, so both are here
+ * and CONFIG_NICE_VIEW_SNORLAX_ROTATE_CCW picks. Only one is compiled. */
+
+#ifdef CONFIG_NICE_VIEW_SNORLAX_ROTATE_CCW
+
 """
-        + "\n".join(parts)
+        + emit(ccw)
+        + """
+#else
+
+"""
+        + emit(cw)
+        + """
+#endif
+"""
     )
 
-print(f"snorlax.c: {len(frames)} frames, {W}x{H}, {8 + ((W + 7) // 8) * H} bytes each")
+print(f"traced {tw}x{th} -> art {aw}x{ah} in {ART}x{ART}, 16 frames each rotation")

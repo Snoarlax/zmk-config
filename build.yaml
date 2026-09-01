@@ -19,32 +19,21 @@
 ---
 include:
   - board: nice_nano_v2
-    shield: corne_left nice_view_adapter nice_view_gem
-    snippet: studio-rpc-usb-uart
-    cmake-args: -DCONFIG_ZMK_STUDIO=y
-  - board: nice_nano_v2
-    shield: corne_right nice_view_adapter nice_view_gem
-  - board: nice_nano_v2
     shield: lily58_left nice_view_adapter nice_view_gem
     snippet: studio-rpc-usb-uart
     cmake-args: -DCONFIG_ZMK_STUDIO=y
   - board: nice_nano_v2
     shield: lily58_right nice_view_adapter nice_view_gem
-  # Right half with the Snorlax art in place of the gem's crystal. Static,
-  # matching CONFIG_NICE_VIEW_GEM_ANIMATION=n in config/lily58.conf; the
-  # _animated variant overrides that for the 16-frame breathing cycle.
-  - board: nice_nano_v2
-    shield: lily58_right nice_view_adapter nice_view_snorlax
-    artifact-name: lily58_right_snorlax
+  # Right half with the Snorlax art instead of the gem's crystal, animated.
+  # The panel's rotation direction isn't knowable from the art it replaces,
+  # so both are built: if the Snorlax lands upside down, flash the _ccw one.
   - board: nice_nano_v2
     shield: lily58_right nice_view_adapter nice_view_snorlax
     cmake-args: -DCONFIG_NICE_VIEW_GEM_ANIMATION=y
-    artifact-name: lily58_right_snorlax_animated
+    artifact-name: lily58_right_snorlax
   - board: nice_nano_v2
-    shield: sofle_left nice_view_adapter nice_view_gem
-    snippet: studio-rpc-usb-uart
-    cmake-args: -DCONFIG_ZMK_STUDIO=y
-  - board: nice_nano_v2
-    shield: sofle_right nice_view_adapter nice_view_gem
+    shield: lily58_right nice_view_adapter nice_view_snorlax
+    cmake-args: -DCONFIG_NICE_VIEW_GEM_ANIMATION=y -DCONFIG_NICE_VIEW_SNORLAX_ROTATE_CCW=y
+    artifact-name: lily58_right_snorlax_ccw
   - board: nice_nano_v2
     shield: settings_reset

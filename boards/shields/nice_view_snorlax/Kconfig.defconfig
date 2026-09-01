@@ -43,6 +43,14 @@ config NICE_VIEW_GEM_ANIMATION_MS
     int "Animation length in milliseconds"
     default 960
 
+config NICE_VIEW_SNORLAX_ROTATE_CCW
+    bool "Store the art rotated counter-clockwise instead of clockwise"
+    default n
+    help
+      The panel is mounted portrait and its canvas is rotated before being
+      drawn, so the art is stored a quarter turn over to arrive upright.
+      Set this if the Snorlax comes out upside down.
+
 config NICE_VIEW_WIDGET_STATUS
     select LV_USE_LABEL
     select LV_USE_IMG
