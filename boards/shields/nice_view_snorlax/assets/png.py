@@ -1,54 +1,61 @@
 #!/usr/bin/env python3
-"""Minimal PNG reader for palette sprites - no third-party deps available."""
+"""Minimal PNG reader - no third-party deps available in CI or on a fresh box.
+
+read(path) -> (width, height, pixels, rgba)
+
+pixels[y][x] is an (r, g, b, a) tuple and rgba() is the identity, so callers
+can stay uniform across colour types. Handles the non-interlaced 8-bit forms
+plus sub-byte palette and greyscale images, which covers what Piskel, GIMP
+and the PokeAPI sprites emit.
+"""
 
 import struct
+import sys
 import zlib
 
 
 def read(path):
     d = open(path, "rb").read()
-    assert d[:8] == b"\x89PNG\r\n\x1a\n", "not a png"
+    if d[:8] != b"\x89PNG\r\n\x1a\n":
+        sys.exit(f"{path}: not a PNG")
 
     pos = 8
     plte = None
-    trns = b""
+    trns = None
     idat = b""
-    w = h = depth = ctype = None
+    w = h = depth = ctype = interlace = None
 
-    while pos < len(d):
+    while pos + 8 <= len(d):
         (length,) = struct.unpack(">I", d[pos : pos + 4])
-        ctag = d[pos + 4 : pos + 8]
+        tag = d[pos + 4 : pos + 8]
         data = d[pos + 8 : pos + 8 + length]
         pos += 12 + length
-        if ctag == b"IHDR":
-            w, h, depth, ctype = struct.unpack(">IIBB", data[:10])
-        elif ctag == b"PLTE":
+        if tag == b"IHDR":
+            w, h, depth, ctype, _, _, interlace = struct.unpack(">IIBBBBB", data[:13])
+        elif tag == b"PLTE":
             plte = data
-        elif ctag == b"tRNS":
+        elif tag == b"tRNS":
             trns = data
-        elif ctag == b"IDAT":
+        elif tag == b"IDAT":
             idat += data
-        elif ctag == b"IEND":
+        elif tag == b"IEND":
             break
 
-    raw = zlib.decompress(idat)
+    if interlace:
+        sys.exit(f"{path}: interlaced PNGs aren't supported - re-export without interlacing")
+    if depth == 16:
+        sys.exit(f"{path}: 16-bit PNGs aren't supported - re-export as 8-bit")
 
-    # samples per pixel, and the filter's byte offset
-    if ctype == 3:
-        spp = 1
-    elif ctype == 0:
-        spp = 1
-    elif ctype == 2:
-        spp = 3
-    elif ctype == 4:
-        spp = 2
-    else:
-        spp = 4
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+    if ctype not in channels:
+        sys.exit(f"{path}: unsupported colour type {ctype}")
+    spp = channels[ctype]
 
     bits_per_pixel = depth * spp
     stride = (w * bits_per_pixel + 7) // 8
     fbpp = max(1, bits_per_pixel // 8)
 
+    raw = zlib.decompress(idat)
     lines = []
     prev = bytearray(stride)
     p = 0
@@ -75,34 +82,52 @@ def read(path):
                 pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
                 pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
                 line[i] = (line[i] + pr) & 0xFF
+        elif ft != 0:
+            sys.exit(f"{path}: bad filter type {ft}")
         lines.append(bytes(line))
         prev = line
 
-    # expand to per-pixel palette indices
-    px = []
-    for line in lines:
-        row = []
+    def samples(line):
+        """One scanline -> flat list of samples, expanding sub-byte depths."""
         if depth == 8:
-            row = list(line[:w])
-        elif depth == 4:
-            for i in range(w):
-                byte = line[i >> 1]
-                row.append((byte >> 4) if i % 2 == 0 else (byte & 0x0F))
-        elif depth == 2:
-            for i in range(w):
-                byte = line[i >> 2]
-                row.append((byte >> (6 - 2 * (i % 4))) & 0x03)
-        elif depth == 1:
-            for i in range(w):
-                byte = line[i >> 3]
-                row.append((byte >> (7 - (i % 8))) & 0x01)
-        px.append(row)
+            return list(line)
+        per_byte = 8 // depth
+        mask = (1 << depth) - 1
+        out = []
+        for i in range(w * spp):
+            byte = line[i // per_byte]
+            shift = 8 - depth * (i % per_byte + 1)
+            out.append((byte >> shift) & mask)
+        return out
 
-    def rgba(idx):
-        r = plte[idx * 3]
-        g = plte[idx * 3 + 1]
-        b = plte[idx * 3 + 2]
-        a = trns[idx] if idx < len(trns) else 255
-        return r, g, b, a
+    # sub-byte greyscale is stored scaled down; bring it back to 0-255
+    grey_scale = 255 // ((1 << depth) - 1) if depth < 8 else 1
 
-    return w, h, px, rgba
+    pixels = []
+    for line in lines:
+        s = samples(line)
+        row = []
+        for x in range(w):
+            if ctype == 3:
+                idx = s[x]
+                if plte is None:
+                    sys.exit(f"{path}: palette image without a PLTE chunk")
+                r, g, b = plte[idx * 3], plte[idx * 3 + 1], plte[idx * 3 + 2]
+                a = trns[idx] if trns and idx < len(trns) else 255
+            elif ctype == 0:
+                v = s[x] * grey_scale
+                r = g = b = v
+                a = 255
+            elif ctype == 4:
+                v = s[x * 2] * grey_scale
+                r = g = b = v
+                a = s[x * 2 + 1] * grey_scale
+            elif ctype == 2:
+                r, g, b = s[x * 3], s[x * 3 + 1], s[x * 3 + 2]
+                a = 255
+            else:  # 6
+                r, g, b, a = s[x * 4], s[x * 4 + 1], s[x * 4 + 2], s[x * 4 + 3]
+            row.append((r, g, b, a))
+        pixels.append(row)
+
+    return w, h, pixels, lambda v: v
