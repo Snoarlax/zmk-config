@@ -7,6 +7,8 @@ Usage:
   gen_snorlax.py sheet.png --frames 2  # a Piskel spritesheet, frames in a row
 
 Draw upright and roughly square; the rotation for the panel is applied here.
+Art is never enlarged, so a drawing that already fits the 66x66 footprint is
+carried through pixel for pixel; anything larger is reduced to fit.
 
 Reduction to one bit: opaque pixels become ink, transparent becomes
 background, and the border of any large pale region - a belly, say - is cut
@@ -255,7 +257,10 @@ def main():
     src = load(paths, sheet_frames)
     x0, x1, y0, y1 = shared_box(src)
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
-    scale = min(ART / bw, ART / bh)
+    # Never enlarge: art that already fits passes through pixel for pixel,
+    # so hand-placed pixels stay where they were drawn. Anything bigger than
+    # the 66x66 footprint is reduced to fit.
+    scale = min(1.0, ART / bw, ART / bh)
     dw, dh = max(1, int(bw * scale)), max(1, int(bh * scale))
 
     upright = []
